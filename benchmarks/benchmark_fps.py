@@ -133,7 +133,7 @@ def benchmark_onnx(
 
 
 def run_full_benchmark(
-    pt_model: str = "yolov8n.pt",
+    pt_model: str = "models/yolov8_navigation.pt",
     pruned_pt: Optional[str] = "models/yolov8_pruned.pt",
     fp32_onnx: Optional[str] = "models/yolov8_navigation.onnx",
     int8_onnx: Optional[str] = "models/yolov8_navigation_int8.onnx",
@@ -221,7 +221,7 @@ def run_full_benchmark(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Run edge benchmarking")
-    parser.add_argument("--model", type=str, default="yolov8n.pt")
+    parser.add_argument("--model", type=str, default="models/yolov8_navigation.pt")
     parser.add_argument("--onnx", type=str, default="models/yolov8_navigation.onnx")
     parser.add_argument("--int8", type=str, default="models/yolov8_navigation_int8.onnx")
     args = parser.parse_args()

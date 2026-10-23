@@ -32,3 +32,21 @@ def test_risk_color_thresholds():
     assert c_crit == annotator.color_critical
     assert c_caut == annotator.color_caution
     assert c_safe == annotator.color_safe
+
+
+def test_end_to_end_navigation_pipeline():
+    from pipeline.navigation_pipeline import RoboticsNavigationPipeline
+    pipeline = RoboticsNavigationPipeline(
+        model_path="models/yolov8_navigation.pt",
+        backend="auto",
+        enable_bev=True,
+        enable_tracking=True
+    )
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    annotated, dets, telemetry = pipeline.process_frame(frame)
+
+    assert annotated.shape == (720, 1280, 3)
+    assert isinstance(dets, list)
+    assert "fps" in telemetry
+    assert "status" in telemetry
+    assert telemetry["status"] in ["NOMINAL", "CAUTION", "CRITICAL"]

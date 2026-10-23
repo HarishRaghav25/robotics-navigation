@@ -34,7 +34,7 @@ class NavigationDetector:
 
     def __init__(
         self,
-        model_path: str = "yolov8n.pt",
+        model_path: str = "models/yolov8_navigation.pt",
         backend: str = "auto",  # 'pytorch', 'onnx', or 'auto'
         conf_thresh: float = 0.30,
         iou_thresh: float = 0.45,
@@ -186,7 +186,8 @@ class NavigationDetector:
         indices = cv2.dnn.NMSBoxes(boxes, confidences, self.conf_thresh, self.iou_thresh)
         detections = []
         if len(indices) > 0:
-            for idx in indices.flatten():
+            idxs = indices.flatten() if hasattr(indices, "flatten") else [i[0] if isinstance(i, (list, tuple, np.ndarray)) else i for i in indices]
+            for idx in idxs:
                 bx, by, bw, bh = boxes[idx]
                 cid = class_ids[idx]
                 cname = self.class_names[cid] if cid < len(self.class_names) else f"class_{cid}"

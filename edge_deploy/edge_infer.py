@@ -13,10 +13,16 @@ import onnxruntime as ort
 
 CLASS_NAMES = ["cone", "barrier", "stop_sign"]
 
-# Canonical object heights (meters)
+# Canonical object heights and widths (meters)
 OBJECT_HEIGHTS = {
     "cone": 0.70,
     "barrier": 0.85,
+    "stop_sign": 0.75
+}
+
+OBJECT_WIDTHS = {
+    "cone": 0.38,
+    "barrier": 1.60,
     "stop_sign": 0.75
 }
 
@@ -75,19 +81,36 @@ class EdgeInferenceEngine:
         blob = np.expand_dims(blob, axis=0)
         return blob, scale, (pad_x, pad_y)
 
-    def estimate_distance(self, cls_name: str, y1: int, y2: int) -> float:
-        """Fast geometric distance estimation using pinhole and ground contact fusion."""
+    def estimate_distance(self, cls_name: str, bbox: List[int], img_h: int = 720, img_w: int = 1280) -> float:
+        """Fast geometric distance estimation using multi-cue fusion with truncation handling."""
+        x1, y1, x2, y2 = bbox
+        bw = max(1.0, float(x2 - x1))
         bh = max(1.0, float(y2 - y1))
-        real_h = OBJECT_HEIGHTS.get(cls_name, 0.70)
-        z_pinhole = (self.fy * real_h) / bh
+        bottom_clipped = y2 >= (img_h - 3)
+        horiz_clipped = (x1 <= 3) or (x2 >= img_w - 3)
+
+        real_w = OBJECT_WIDTHS.get(cls_name, 0.50)
+        z_w = (self.fx * real_w) / bw
+
+        aspect = bh / bw
+        if cls_name == "stop_sign":
+            real_h = 2.05 if aspect > 1.6 else 0.75
+        else:
+            real_h = OBJECT_HEIGHTS.get(cls_name, 0.70)
+        z_h = (self.fy * real_h) / bh
 
         dy = max(1.0, float(y2 - self.cy))
         z_ground = self.cam_height / np.tan(np.arctan2(dy, self.fy))
 
-        if cls_name == "stop_sign":
-            z = 0.85 * z_pinhole + 0.15 * z_ground
+        if bottom_clipped:
+            z = min(z_w if not horiz_clipped else 2.67, 2.67)
+        elif horiz_clipped:
+            z = 0.60 * z_h + 0.40 * z_ground if cls_name != "stop_sign" or aspect > 1.6 else z_h
+        elif cls_name == "stop_sign":
+            z = 0.45 * z_w + 0.35 * z_h + 0.20 * z_ground if aspect > 1.6 else 0.50 * z_w + 0.50 * z_h
         else:
-            z = 0.45 * z_pinhole + 0.55 * z_ground
+            z = 0.35 * z_w + 0.30 * z_h + 0.35 * z_ground
+
         return float(np.clip(z, 0.3, 50.0))
 
     def infer_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
@@ -127,13 +150,14 @@ class EdgeInferenceEngine:
         annotated = frame.copy()
 
         if len(indices) > 0:
-            for idx in indices.flatten():
+            idxs = indices.flatten() if hasattr(indices, "flatten") else [i[0] if isinstance(i, (list, tuple, np.ndarray)) else i for i in indices]
+            for idx in idxs:
                 bx, by, bw, bh = boxes[idx]
                 cid = class_ids[idx]
                 cname = CLASS_NAMES[cid] if cid < len(CLASS_NAMES) else f"class_{cid}"
                 x1, y1, x2, y2 = bx, by, bx + bw, by + bh
 
-                dist = self.estimate_distance(cname, y1, y2)
+                dist = self.estimate_distance(cname, [x1, y1, x2, y2], orig_h, orig_w)
                 disp_name = {"cone": "Cone", "barrier": "Barrier", "stop_sign": "Stop Sign"}.get(cname, cname.title())
                 label = f"{disp_name}, {dist:.1f}m"
 
@@ -157,7 +181,7 @@ class EdgeInferenceEngine:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Standalone Edge Inference Engine")
-    parser.add_argument("--model", type=str, required=True, help="Path to ONNX model")
+    parser.add_argument("--model", type=str, default="models/yolov8_navigation_int8.onnx", help="Path to ONNX model")
     parser.add_argument("--input", type=str, default="data/sample_media/test_scene.jpg", help="Input image path")
     parser.add_argument("--output", type=str, default="outputs/edge_output.jpg", help="Output image path")
     args = parser.parse_args()

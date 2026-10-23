@@ -107,22 +107,22 @@ Hardware platform evaluated: **NVIDIA GeForce RTX 4050 Laptop GPU (6 GB VRAM)** 
 
 | Model Variant | Framework | Device | Mean Latency (ms) | P50 Latency (ms) | P95 Latency (ms) | Throughput (FPS) | Model File Size | Compression Ratio |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **YOLOv8n (FP32)** | PyTorch | CPU | 148.27 ms | 144.02 ms | 177.81 ms | **6.7 FPS** | 5.93 MB | Baseline |
-| **YOLOv8n (FP32)** | PyTorch | CUDA (GPU) | 36.37 ms | 34.63 ms | 49.57 ms | **27.5 FPS** | 5.93 MB | Baseline |
-| **YOLOv8n (Pruned 30%)** | PyTorch | CPU | 150.76 ms | 149.10 ms | 167.13 ms | **6.6 FPS** | 11.74 MB (unstripped) | 29.95% Sparsity |
-| **YOLOv8n (FP32)** | ONNX Runtime | CPU | 103.49 ms | 102.85 ms | 110.40 ms | **9.7 FPS** | 11.67 MB | 1.43x CPU Speedup |
-| **YOLOv8n (INT8 Quantized)**| ONNX Runtime | CPU | 1446.44 ms | 1445.86 ms | 1515.11 ms | **0.7 FPS** | **3.19 MB** | **3.66x Compression (72.7% reduction)** |
+| **yolov8_navigation.pt (FP32)** | PyTorch | CPU | 103.51 ms | 103.62 ms | 113.34 ms | **9.7 FPS** | 5.94 MB | Baseline |
+| **yolov8_navigation.pt (FP32)** | PyTorch | CUDA (GPU) | 20.69 ms | 18.51 ms | 34.99 ms | **48.3 FPS** | 5.94 MB | Baseline |
+| **YOLOv8n (Pruned 30%)** | PyTorch | CPU | 100.74 ms | 99.77 ms | 110.56 ms | **9.9 FPS** | 11.74 MB (unstripped) | 29.95% Sparsity |
+| **yolov8_navigation.onnx (FP32)** | ONNX Runtime | CPU | 58.72 ms | 57.16 ms | 68.78 ms | **17.0 FPS** | 11.67 MB | 1.76x CPU Speedup |
+| **yolov8_navigation_int8.onnx** | ONNX Runtime | CPU | 639.35 ms | 624.54 ms | 744.23 ms | **1.6 FPS** | **3.19 MB** | **3.66x Compression (72.7% reduction)** |
 
 ### Optimization Findings:
 1. **Model Compression (INT8 Dynamic Quantization):**
    - File size reduced from **11.67 MB** to **3.19 MB** (**72.7% reduction**).
    - Ideal for low-storage embedded flash memory on drones and micro-rovers.
 2. **ONNX Runtime Acceleration:**
-   - ONNX Runtime CPU execution provider achieved a **43% throughput boost** over native PyTorch CPU (9.7 FPS vs 6.7 FPS).
+   - ONNX Runtime CPU execution provider achieved a **1.76x throughput boost** over native PyTorch CPU (17.0 FPS vs 9.7 FPS).
 3. **Weight Pruning:**
-   - Permanent L1-norm unstructured pruning achieved **29.95% weight sparsity** across all 64 Conv2d layers with negligible degradation in representation.
+   - Permanent L1-norm unstructured pruning achieved **29.95% weight sparsity** across all 64 Conv2d layers.
 4. **GPU Acceleration:**
-   - CUDA inference delivers **27.5 FPS** (~36 ms), meeting real-time robotics obstacle avoidance requirements (>25 FPS).
+   - CUDA inference delivers **48.3 FPS** (~20 ms), comfortably exceeding real-time robotics obstacle avoidance requirements (>30 FPS).
 
 ---
 

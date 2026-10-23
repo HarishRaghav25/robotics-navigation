@@ -24,7 +24,7 @@ class RoboticsNavigationPipeline:
 
     def __init__(
         self,
-        model_path: str = "yolov8n.pt",
+        model_path: str = "models/yolov8_navigation.pt",
         backend: str = "auto",
         camera_config: str = "configs/camera_params.yaml",
         device: Optional[str] = None,

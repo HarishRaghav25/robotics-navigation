@@ -139,6 +139,14 @@ class NavigationAnnotator:
             # Draw aesthetic corner box
             self.draw_corner_box(out, bbox, color, thickness=2)
 
+            # Draw Optical Flow motion vector arrow if moving
+            flow_vec = det.get("flow_vector")
+            if flow_vec and (abs(flow_vec[0]) > 0.5 or abs(flow_vec[1]) > 0.5):
+                cx = (bbox[0] + bbox[2]) // 2
+                cy = (bbox[1] + bbox[3]) // 2
+                arrow_end = (int(cx + flow_vec[0] * 3), int(cy + flow_vec[1] * 3))
+                cv2.arrowedLine(out, (cx, cy), arrow_end, (0, 255, 255), 2, tipLength=0.35)
+
             # Strict Required Label Format: "Cone, 1.5m" or "Stop Sign, 3.2m"
             label = det.get("formatted_label")
             if not label:

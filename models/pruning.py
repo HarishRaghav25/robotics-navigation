@@ -108,7 +108,7 @@ def prune_model(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Prune YOLO model for edge robotics")
-    parser.add_argument("--model", type=str, default="yolov8n.pt", help="Path to model")
+    parser.add_argument("--model", type=str, default="models/yolov8_navigation.pt", help="Path to model")
     parser.add_argument("--amount", type=float, default=0.30, help="Pruning ratio (0.0 to 1.0)")
     parser.add_argument("--output", type=str, default="models/yolov8_pruned.pt", help="Output path")
     args = parser.parse_args()

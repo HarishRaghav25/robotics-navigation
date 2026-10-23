@@ -18,7 +18,7 @@ except ImportError:
 
 
 def export_to_onnx(
-    model_path: str = "yolov8n.pt",
+    model_path: str = "models/yolov8_navigation.pt",
     output_onnx: Optional[str] = "models/yolov8_navigation.onnx",
     imgsz: int = 640,
     opset: int = 17,
@@ -115,7 +115,7 @@ def quantize_onnx_int8(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Export and quantize YOLO for edge robotics")
-    parser.add_argument("--model", type=str, default="yolov8n.pt", help="PyTorch model path")
+    parser.add_argument("--model", type=str, default="models/yolov8_navigation.pt", help="PyTorch model path")
     parser.add_argument("--onnx_out", type=str, default="models/yolov8_navigation.onnx", help="ONNX output")
     parser.add_argument("--int8_out", type=str, default="models/yolov8_navigation_int8.onnx", help="INT8 output")
     args = parser.parse_args()

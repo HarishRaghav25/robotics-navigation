@@ -113,6 +113,8 @@ class DistanceEstimator:
     ) -> Dict[str, Any]:
         """
         Compute robust 3D metric distance to detected object.
+        Fuses horizontal pinhole (width), vertical pinhole (height), and ground-plane ray geometry.
+        Automatically handles boundary clipping (near-field obstacles < 2.5m) and elevated stop signs.
 
         Args:
             class_name: "cone", "barrier", or "stop_sign"
@@ -120,11 +122,7 @@ class DistanceEstimator:
             method: "pinhole", "ground", or "hybrid"
 
         Returns:
-            Dictionary with:
-            - distance: estimated 3D Euclidean distance (meters)
-            - z: longitudinal distance (meters)
-            - x: lateral offset from camera axis (meters)
-            - formatted_label: e.g. "Cone, 1.5m" or "Stop Sign, 3.2m"
+            Dictionary with distance, z, x, and formatted_label e.g. "Cone, 1.5m", "Stop Sign, 3.2m"
         """
         x1, y1, x2, y2 = bbox
         bw = max(1.0, float(x2 - x1))
@@ -132,33 +130,91 @@ class DistanceEstimator:
         u_center = (x1 + x2) / 2.0
         norm_name = class_name.lower().replace(" ", "_")
 
-        # 1. Pinhole height distance
-        z_pinhole_h = self.estimate_pinhole_height(norm_name, bh)
+        # Boundary truncation flags
+        bottom_clipped = y2 >= (self.image_height - 3)
+        top_clipped = y1 <= 3
+        left_clipped = x1 <= 3
+        right_clipped = x2 >= (self.image_width - 3)
+        horiz_clipped = left_clipped or right_clipped
 
-        # 2. Ground contact distance
+        # Ground FOV limit at bottom of image
+        dy_bot = max(1.0, float(self.image_height - 1 - self.cy))
+        alpha_bot = math.atan2(dy_bot, self.fy)
+        z_bottom_fov = self.camera_height / math.tan(self.camera_pitch + alpha_bot)
+
+        # 1. Horizontal pinhole distance (width)
+        z_pinhole_w = self.estimate_pinhole_width(norm_name, bw)
+
+        # 2. Vertical pinhole distance (height) with adaptive prior
+        aspect = bh / bw
+        if norm_name == "stop_sign":
+            # If aspect ratio > 1.6, detection encompasses the support post (total ~2.05m)
+            # If aspect ratio <= 1.6, detection is only the octagonal face (0.75m)
+            real_h = 2.05 if aspect > 1.6 else 0.75
+            z_pinhole_h = (self.fy * real_h) / bh
+        else:
+            z_pinhole_h = self.estimate_pinhole_height(norm_name, bh)
+
+        # 3. Ground contact distance
         z_ground = self.estimate_ground_plane(float(y2))
 
-        # 3. Hybrid fusion
+        # 4. Multi-Cue Hybrid Estimation
         if method == "pinhole":
-            z_final = z_pinhole_h
+            if not horiz_clipped and (bottom_clipped or top_clipped):
+                z_final = z_pinhole_w
+            else:
+                z_final = 0.5 * z_pinhole_h + 0.5 * z_pinhole_w
         elif method == "ground":
             z_final = z_ground
         else:
-            # Weighted multi-hypothesis fusion
-            if norm_name == "stop_sign":
-                # Stop signs are elevated on poles; height prior is reliable
-                w_pinhole = 0.85
-                w_ground = 0.15
-            elif norm_name == "barrier":
-                # Barriers sit on ground; ground contact & height are both valid
-                w_pinhole = 0.40
-                w_ground = 0.60
-            else:  # cone
-                # Traffic cones rest directly on the ground
-                w_pinhole = 0.45
-                w_ground = 0.55
+            # Intelligent Multi-Cue Hybrid Fusion
+            if bottom_clipped:
+                # Near-field obstacle where base is clipped by bottom frame edge (< 2.6m)
+                # Ground contact and box height are truncated and overestimate distance.
+                if not horiz_clipped:
+                    z_final = z_pinhole_w
+                else:
+                    z_final = min(z_pinhole_w, z_bottom_fov)
+                z_final = min(z_final, z_bottom_fov)
 
-            z_final = w_pinhole * z_pinhole_h + w_ground * z_ground
+            elif top_clipped and not bottom_clipped:
+                # Top clipped, but ground contact and width are valid
+                if horiz_clipped:
+                    z_final = z_ground
+                elif norm_name != "stop_sign":
+                    z_final = 0.60 * z_ground + 0.40 * z_pinhole_w
+                else:
+                    z_final = z_pinhole_w
+
+            elif horiz_clipped:
+                # Object is clipped by left or right frame edge (width is truncated)
+                # Pinhole width will overestimate distance; rely on height and ground contact
+                if norm_name == "stop_sign":
+                    if aspect > 1.6:
+                        z_final = 0.65 * z_pinhole_h + 0.35 * z_ground
+                    else:
+                        z_final = z_pinhole_h
+                elif norm_name == "barrier":
+                    z_final = 0.50 * z_pinhole_h + 0.50 * z_ground
+                else:  # cone
+                    z_final = 0.45 * z_pinhole_h + 0.55 * z_ground
+
+            elif norm_name == "stop_sign":
+                # Fully visible stop sign
+                if aspect > 1.6:
+                    # Sign + post: ground contact and height are both valid
+                    z_final = 0.45 * z_pinhole_w + 0.35 * z_pinhole_h + 0.20 * z_ground
+                else:
+                    # Octagon only: elevated sign, ground contact is invalid!
+                    z_final = 0.50 * z_pinhole_w + 0.50 * z_pinhole_h
+
+            elif norm_name == "barrier":
+                # Jersey / pedestrian barrier sitting on ground
+                z_final = 0.30 * z_pinhole_w + 0.35 * z_pinhole_h + 0.35 * z_ground
+
+            else:  # cone
+                # Traffic cone resting on ground
+                z_final = 0.35 * z_pinhole_w + 0.30 * z_pinhole_h + 0.35 * z_ground
 
         # Clamp to realistic min/max ranges
         spec = self.object_specs.get(norm_name, {"min_dist": 0.3, "max_dist": 60.0})
@@ -188,6 +244,8 @@ class DistanceEstimator:
             "z": round(z_final, 2),
             "x": round(x_lateral, 2),
             "z_pinhole": round(z_pinhole_h, 2),
+            "z_pinhole_w": round(z_pinhole_w, 2),
             "z_ground": round(z_ground, 2),
-            "formatted_label": formatted_label
+            "formatted_label": formatted_label,
+            "bottom_clipped": bottom_clipped
         }
