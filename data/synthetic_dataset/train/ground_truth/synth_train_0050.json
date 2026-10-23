@@ -1,0 +1,32 @@
+[
+  {
+    "class_id": 0,
+    "class_name": "cone",
+    "bbox": [
+      628,
+      371,
+      642,
+      398
+    ],
+    "distance_3d": 25.1,
+    "distance_z": 25.08,
+    "X": -0.12,
+    "Y": 1.0,
+    "Z": 25.08
+  },
+  {
+    "class_id": 0,
+    "class_name": "cone",
+    "bbox": [
+      491,
+      401,
+      543,
+      497
+    ],
+    "distance_3d": 7.11,
+    "distance_z": 6.98,
+    "X": -0.89,
+    "Y": 1.0,
+    "Z": 6.98
+  }
+]

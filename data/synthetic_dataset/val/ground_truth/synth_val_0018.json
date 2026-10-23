@@ -1,0 +1,47 @@
+[
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      629,
+      370,
+      739,
+      429
+    ],
+    "distance_3d": 13.84,
+    "distance_z": 13.79,
+    "X": 0.64,
+    "Y": 1.0,
+    "Z": 13.79
+  },
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      689,
+      371,
+      809,
+      436
+    ],
+    "distance_3d": 12.73,
+    "distance_z": 12.61,
+    "X": 1.44,
+    "Y": 1.0,
+    "Z": 12.61
+  },
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      482,
+      374,
+      638,
+      457
+    ],
+    "distance_3d": 9.9,
+    "distance_z": 9.82,
+    "X": -0.81,
+    "Y": 1.0,
+    "Z": 9.82
+  }
+]

@@ -1,0 +1,62 @@
+[
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      659,
+      365,
+      719,
+      397
+    ],
+    "distance_3d": 25.37,
+    "distance_z": 25.31,
+    "X": 1.3,
+    "Y": 1.0,
+    "Z": 25.31
+  },
+  {
+    "class_id": 2,
+    "class_name": "stop_sign",
+    "bbox": [
+      532,
+      308,
+      568,
+      409
+    ],
+    "distance_3d": 19.59,
+    "distance_z": 19.48,
+    "X": -1.82,
+    "Y": 1.0,
+    "Z": 19.48
+  },
+  {
+    "class_id": 0,
+    "class_name": "cone",
+    "bbox": [
+      572,
+      395,
+      616,
+      478
+    ],
+    "distance_3d": 8.19,
+    "distance_z": 8.12,
+    "X": -0.38,
+    "Y": 1.0,
+    "Z": 8.12
+  },
+  {
+    "class_id": 0,
+    "class_name": "cone",
+    "bbox": [
+      430,
+      396,
+      474,
+      480
+    ],
+    "distance_3d": 8.19,
+    "distance_z": 7.97,
+    "X": -1.56,
+    "Y": 1.0,
+    "Z": 7.97
+  }
+]

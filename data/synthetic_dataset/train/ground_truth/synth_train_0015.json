@@ -1,0 +1,77 @@
+[
+  {
+    "class_id": 0,
+    "class_name": "cone",
+    "bbox": [
+      606,
+      375,
+      624,
+      410
+    ],
+    "distance_3d": 19.02,
+    "distance_z": 18.99,
+    "X": -0.48,
+    "Y": 1.0,
+    "Z": 18.99
+  },
+  {
+    "class_id": 0,
+    "class_name": "cone",
+    "bbox": [
+      738,
+      385,
+      770,
+      444
+    ],
+    "distance_3d": 11.44,
+    "distance_z": 11.31,
+    "X": 1.35,
+    "Y": 1.0,
+    "Z": 11.31
+  },
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      383,
+      376,
+      553,
+      467
+    ],
+    "distance_3d": 9.16,
+    "distance_z": 8.96,
+    "X": -1.6,
+    "Y": 1.0,
+    "Z": 8.96
+  },
+  {
+    "class_id": 0,
+    "class_name": "cone",
+    "bbox": [
+      790,
+      407,
+      850,
+      519
+    ],
+    "distance_3d": 6.19,
+    "distance_z": 6.01,
+    "X": 1.13,
+    "Y": 1.0,
+    "Z": 6.01
+  },
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      253,
+      394,
+      625,
+      592
+    ],
+    "distance_3d": 4.33,
+    "distance_z": 4.12,
+    "X": -0.86,
+    "Y": 1.0,
+    "Z": 4.12
+  }
+]

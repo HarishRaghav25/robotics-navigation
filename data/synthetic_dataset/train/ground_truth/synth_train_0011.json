@@ -1,0 +1,32 @@
+[
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      672,
+      367,
+      748,
+      408
+    ],
+    "distance_3d": 19.96,
+    "distance_z": 19.88,
+    "X": 1.46,
+    "Y": 1.0,
+    "Z": 19.88
+  },
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      439,
+      376,
+      619,
+      472
+    ],
+    "distance_3d": 8.64,
+    "distance_z": 8.52,
+    "X": -0.98,
+    "Y": 1.0,
+    "Z": 8.52
+  }
+]

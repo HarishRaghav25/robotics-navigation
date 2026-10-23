@@ -1,0 +1,57 @@
+[
+  {
+    "model": "yolov8_navigation.pt",
+    "framework": "PyTorch",
+    "device": "CPU",
+    "mean_latency_ms": 148.27,
+    "std_latency_ms": 15.85,
+    "p50_ms": 144.02,
+    "p95_ms": 177.81,
+    "fps": 6.7,
+    "file_size_mb": 5.93
+  },
+  {
+    "model": "yolov8_navigation.pt",
+    "framework": "PyTorch",
+    "device": "CUDA",
+    "mean_latency_ms": 36.37,
+    "std_latency_ms": 9.13,
+    "p50_ms": 34.63,
+    "p95_ms": 49.57,
+    "fps": 27.5,
+    "file_size_mb": 5.93
+  },
+  {
+    "model": "YOLOv8n (Pruned 30%)",
+    "framework": "PyTorch",
+    "device": "CPU",
+    "mean_latency_ms": 150.76,
+    "std_latency_ms": 14.86,
+    "p50_ms": 149.1,
+    "p95_ms": 167.13,
+    "fps": 6.6,
+    "file_size_mb": 11.74
+  },
+  {
+    "model": "yolov8_navigation.onnx",
+    "framework": "ONNX Runtime",
+    "device": "CPU",
+    "mean_latency_ms": 103.49,
+    "std_latency_ms": 4.13,
+    "p50_ms": 102.85,
+    "p95_ms": 110.4,
+    "fps": 9.7,
+    "file_size_mb": 11.67
+  },
+  {
+    "model": "yolov8_navigation_int8.onnx",
+    "framework": "ONNX Runtime",
+    "device": "CPU",
+    "mean_latency_ms": 1446.44,
+    "std_latency_ms": 47.84,
+    "p50_ms": 1445.86,
+    "p95_ms": 1515.11,
+    "fps": 0.7,
+    "file_size_mb": 3.19
+  }
+]

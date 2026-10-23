@@ -1,0 +1,27 @@
+model:
+  backbone: "yolov8n.pt"          # Ultralytics lightweight model for edge deployment
+  input_size: [640, 640]          # Inference resolution
+  confidence_threshold: 0.35      # Confidence threshold for detection
+  iou_threshold: 0.45             # NMS IoU threshold
+  classes:
+    0: "cone"
+    1: "barrier"
+    2: "stop_sign"
+
+training:
+  epochs: 15
+  batch_size: 16
+  learning_rate: 0.001
+  device: "0"                     # Use CUDA:0 if available, else 'cpu'
+  save_dir: "runs/train"
+
+optimization:
+  pruning:
+    amount: 0.30                  # 30% structured L1 pruning
+  onnx:
+    opset: 17
+    dynamic_axes: true
+    export_path: "models/yolov8_navigation.onnx"
+  quantization:
+    type: "dynamic_int8"
+    quantized_path: "models/yolov8_navigation_int8.onnx"

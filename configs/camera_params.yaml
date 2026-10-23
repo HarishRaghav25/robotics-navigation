@@ -1,0 +1,35 @@
+camera:
+  # Intrinsic parameters (Pinhole model)
+  fx: 960.0
+  fy: 960.0
+  cx: 640.0
+  cy: 360.0
+  image_width: 1280
+  image_height: 720
+
+  # Extrinsic parameters (Robot body frame relative to ground)
+  camera_height: 1.0       # Mounting height above ground plane in meters
+  camera_pitch: 0.0        # Pitch angle in radians (downwards is positive)
+  camera_yaw: 0.0          # Yaw angle in radians
+  camera_roll: 0.0         # Roll angle in radians
+
+  # Stereo baseline (meters) for epipolar distance estimation
+  stereo_baseline: 0.20    # 20cm baseline typical for mobile robot stereo rigs
+
+# Standard canonical physical dimensions (in meters) for detected navigation objects
+object_dimensions:
+  cone:
+    height: 0.70           # Standard 28-inch traffic cone height (0.71m)
+    width: 0.38            # Base diameter
+    min_dist: 0.3          # Minimum valid range in meters
+    max_dist: 50.0         # Maximum valid range in meters
+  barrier:
+    height: 0.85           # Standard jersey/pedestrian barricade height
+    width: 1.60            # Typical segment width
+    min_dist: 0.5
+    max_dist: 60.0
+  stop_sign:
+    height: 0.75           # Standard MUTCD 30-inch octagonal stop sign
+    width: 0.75
+    min_dist: 0.5
+    max_dist: 70.0

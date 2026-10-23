@@ -1,0 +1,47 @@
+[
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      665,
+      366,
+      731,
+      401
+    ],
+    "distance_3d": 23.31,
+    "distance_z": 23.24,
+    "X": 1.41,
+    "Y": 1.0,
+    "Z": 23.24
+  },
+  {
+    "class_id": 1,
+    "class_name": "barrier",
+    "bbox": [
+      645,
+      371,
+      771,
+      439
+    ],
+    "distance_3d": 12.11,
+    "distance_z": 12.04,
+    "X": 0.86,
+    "Y": 1.0,
+    "Z": 12.04
+  },
+  {
+    "class_id": 2,
+    "class_name": "stop_sign",
+    "bbox": [
+      0,
+      115,
+      9,
+      593
+    ],
+    "distance_3d": 5.24,
+    "distance_z": 4.12,
+    "X": -3.08,
+    "Y": 1.0,
+    "Z": 4.12
+  }
+]

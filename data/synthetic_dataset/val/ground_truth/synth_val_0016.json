@@ -1,0 +1,32 @@
+[
+  {
+    "class_id": 2,
+    "class_name": "stop_sign",
+    "bbox": [
+      778,
+      307,
+      814,
+      410
+    ],
+    "distance_3d": 19.3,
+    "distance_z": 19.02,
+    "X": 3.11,
+    "Y": 1.0,
+    "Z": 19.02
+  },
+  {
+    "class_id": 2,
+    "class_name": "stop_sign",
+    "bbox": [
+      414,
+      269,
+      478,
+      446
+    ],
+    "distance_3d": 11.35,
+    "distance_z": 11.08,
+    "X": -2.23,
+    "Y": 1.0,
+    "Z": 11.08
+  }
+]
