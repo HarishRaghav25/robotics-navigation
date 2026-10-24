@@ -255,3 +255,10 @@ Barrier, 2.8m
 - **Red Box (< 2.0m):** Critical collision danger.
 - **Yellow Box (2.0m – 5.0m):** Caution / slow down.
 - **Green Box (> 5.0m):** Safe corridor.
+
+## Contact
+Name: Harish Raghavendra V
+
+Phone No: 9944770580
+
+Email: vharishraghavendra@gmail.com
