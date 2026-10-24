@@ -5,6 +5,7 @@ BEV Homography Mapping, Optical Flow Tracking, and Telemetry Annotation.
 """
 
 import time
+import math
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 import cv2
@@ -29,11 +30,15 @@ class RoboticsNavigationPipeline:
         camera_config: str = "configs/camera_params.yaml",
         device: Optional[str] = None,
         enable_bev: bool = True,
-        enable_tracking: bool = True
+        enable_tracking: bool = True,
+        conf_thresh: float = 0.30,
+        iou_thresh: float = 0.45
     ):
         self.detector = NavigationDetector(
             model_path=model_path,
             backend=backend,
+            conf_thresh=conf_thresh,
+            iou_thresh=iou_thresh,
             device=device
         )
         self.distance_estimator = DistanceEstimator(camera_config)
@@ -60,7 +65,8 @@ class RoboticsNavigationPipeline:
     def process_frame(
         self,
         frame: np.ndarray,
-        estimation_method: str = "hybrid"
+        estimation_method: str = "hybrid",
+        dt: Optional[float] = None
     ) -> Tuple[np.ndarray, List[Dict[str, Any]], Dict[str, Any]]:
         """
         Process a single camera frame.
@@ -68,6 +74,7 @@ class RoboticsNavigationPipeline:
         Args:
             frame: BGR numpy image (H, W, 3)
             estimation_method: "hybrid", "pinhole", or "ground"
+            dt: Optional elapsed time (seconds) since previous frame for tracking / FPS
 
         Returns:
             annotated_frame: Rendered image with boxes, distance tags, and BEV map
@@ -94,9 +101,19 @@ class RoboticsNavigationPipeline:
             merged = {**det, **dist_info}
             enriched_detections.append(merged)
 
+        # Elapsed time handling
+        curr_time = time.time()
+        if dt is not None and isinstance(dt, (int, float)) and math.isfinite(dt) and dt > 0:
+            effective_dt = float(dt)
+        else:
+            diff = curr_time - self.prev_time
+            effective_dt = diff if diff > 1e-5 else (1.0 / 30.0)
+        self.prev_time = curr_time
+
         # 3. Temporal Optical Flow Tracking & TTC (if enabled)
         if self.enable_tracking and self.tracker is not None:
-            enriched_detections = self.tracker.update(frame, enriched_detections)
+            self.tracker.dt = effective_dt
+            enriched_detections = self.tracker.update(frame, enriched_detections, dt=effective_dt)
 
         # 4. Bird's-Eye View Top-Down Radar Map (if enabled)
         radar_img = None
@@ -105,11 +122,8 @@ class RoboticsNavigationPipeline:
 
         # Latency & FPS calculation
         proc_time = time.perf_counter() - start_t
-        curr_time = time.time()
-        dt = curr_time - self.prev_time
-        self.prev_time = curr_time
-        if dt > 0:
-            self.fps = 0.9 * self.fps + 0.1 * (1.0 / dt) if self.fps > 0 else (1.0 / dt)
+        if effective_dt > 0:
+            self.fps = 0.9 * self.fps + 0.1 * (1.0 / effective_dt) if self.fps > 0 else (1.0 / effective_dt)
 
         # 5. Annotation & HUD Overlay
         annotated_frame = self.annotator.annotate(

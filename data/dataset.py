@@ -29,16 +29,141 @@ class BDD100KParser:
     """Parser to extract navigation relevant classes from BDD100K detection labels."""
 
     BDD_CATEGORY_MAP = {
-        "traffic sign": "stop_sign",  # Filtered or mapped
         "stop sign": "stop_sign",
+        "stop_sign": "stop_sign",
+        "stopsign": "stop_sign",
+        "stop-sign": "stop_sign",
         "barrier": "barrier",
         "cone": "cone",
-        "traffic cone": "cone"
+        "traffic cone": "cone",
+        "traffic_cone": "cone",
+        "traffic-cone": "cone"
     }
 
     def __init__(self, annotation_file: str, images_dir: str):
         self.annotation_file = Path(annotation_file)
         self.images_dir = Path(images_dir)
+
+    @staticmethod
+    def is_octagonal_stop_sign(label: Dict, image: Optional[np.ndarray] = None) -> bool:
+        """
+        Determine whether a label represents an octagonal stop sign rather than
+        a general traffic sign. Evaluates label category, metadata attributes,
+        polygon geometry (if present), aspect ratio, and visual cues (color/shape
+        contour analysis on the image crop).
+        """
+        if not isinstance(label, dict):
+            return False
+
+        category = str(label.get("category", "")).lower().strip()
+        norm_cat = category.replace("-", " ").replace("_", " ")
+
+        # Explicit stop sign category
+        if norm_cat in ("stop sign", "stopsign") or category in ("stop sign", "stop_sign", "stopsign", "stop-sign"):
+            return True
+
+        # Check explicit attributes / subcategory if present
+        attrs = label.get("attributes")
+        if not isinstance(attrs, dict):
+            attrs = {}
+
+        sign_type = str(attrs.get("trafficSignType") or attrs.get("signType") or attrs.get("type") or "").lower()
+        shape = str(attrs.get("shape") or attrs.get("trafficSignShape") or "").lower()
+        name = str(label.get("name") or "").lower()
+        subcat = str(label.get("subCategory") or label.get("subcategory") or "").lower()
+
+        if "stop" in sign_type or "stop" in name or "stop" in subcat:
+            return True
+        if shape in ("octagonal", "octagon") or "octagon" in shape:
+            return True
+
+        # If not labeled as general traffic sign, it's not a stop sign
+        if norm_cat not in ("traffic sign", "trafficsign"):
+            return False
+
+        # If box2d is missing or invalid, cannot inspect geometry or image
+        b = label.get("box2d")
+        if not isinstance(b, dict):
+            return False
+
+        try:
+            x1 = float(b["x1"])
+            y1 = float(b["y1"])
+            x2 = float(b["x2"])
+            y2 = float(b["y2"])
+        except (KeyError, ValueError, TypeError):
+            return False
+
+        x1, x2 = min(x1, x2), max(x1, x2)
+        y1, y2 = min(y1, y2), max(y1, y2)
+        bw = x2 - x1
+        bh = y2 - y1
+
+        # Check aspect ratio for octagonal face: stop signs are roughly 1:1
+        if bh <= 0 or bw <= 0:
+            return False
+        aspect_ratio = bw / bh
+        if not (0.70 <= aspect_ratio <= 1.35):
+            return False
+
+        # Check polygon approximation if poly2d annotation exists
+        poly2d = label.get("poly2d")
+        if isinstance(poly2d, list):
+            for poly in poly2d:
+                if isinstance(poly, dict):
+                    vertices = poly.get("vertices")
+                    if isinstance(vertices, (list, tuple)) and 7 <= len(vertices) <= 9:
+                        return True
+                elif isinstance(poly, (list, tuple)) and 7 <= len(poly) <= 9:
+                    return True
+
+        # If image crop is available, perform visual color & shape verification
+        if image is not None and isinstance(image, np.ndarray) and image.size > 0:
+            # Handle grayscale conversion if single-channel
+            if image.ndim == 2:
+                img_bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            elif image.ndim == 3 and image.shape[2] == 1:
+                img_bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            elif image.ndim == 3 and image.shape[2] >= 3:
+                img_bgr = image[:, :, :3]
+            else:
+                img_bgr = None
+
+            if img_bgr is not None:
+                h_img, w_img = img_bgr.shape[:2]
+                ix1 = max(0, min(w_img - 1, int(round(x1))))
+                ix2 = max(0, min(w_img, int(round(x2))))
+                iy1 = max(0, min(h_img - 1, int(round(y1))))
+                iy2 = max(0, min(h_img, int(round(y2))))
+
+                if (ix2 - ix1) >= 8 and (iy2 - iy1) >= 8:
+                    crop = img_bgr[iy1:iy2, ix1:ix2]
+                    if crop.size > 0 and crop.shape[0] > 0 and crop.shape[1] > 0:
+                        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+
+                        # Red color range in HSV (split across hue 0/180)
+                        mask1 = cv2.inRange(hsv, np.array([0, 40, 30]), np.array([12, 255, 255]))
+                        mask2 = cv2.inRange(hsv, np.array([160, 40, 30]), np.array([180, 255, 255]))
+                        red_mask = mask1 | mask2
+
+                        total_pixels = crop.shape[0] * crop.shape[1]
+                        red_pixels = cv2.countNonZero(red_mask)
+                        red_ratio = red_pixels / float(total_pixels) if total_pixels > 0 else 0.0
+
+                        # Stop signs have a prominent red field (typically > 20% of bounding box)
+                        if red_ratio >= 0.20:
+                            contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            if contours:
+                                largest_cnt = max(contours, key=cv2.contourArea)
+                                cnt_area = cv2.contourArea(largest_cnt)
+                                if cnt_area >= 0.25 * total_pixels:
+                                    peri = cv2.arcLength(largest_cnt, True)
+                                    approx = cv2.approxPolyDP(largest_cnt, 0.025 * peri, True)
+                                    # Regular octagon under perspective/discretization yields 6 to 10 vertices
+                                    if 6 <= len(approx) <= 10 or red_ratio >= 0.35:
+                                        return True
+
+        return False
 
     def convert_to_yolo(self, output_dir: str, max_samples: Optional[int] = None) -> int:
         """Convert BDD100K annotations to YOLO format."""
@@ -55,27 +180,72 @@ class BDD100KParser:
 
         count = 0
         for item in data:
+            if not isinstance(item, dict):
+                continue
             if max_samples and count >= max_samples:
                 break
 
             img_name = item.get("name", "")
             labels = item.get("labels", [])
+            if not isinstance(labels, list):
+                continue
             yolo_lines = []
 
+            # Attempt to load image if available for visual verification
+            img_path = self.images_dir / img_name
+            img = cv2.imread(str(img_path)) if (self.images_dir.exists() and img_path.exists()) else None
+
             for label in labels:
-                category = label.get("category", "").lower()
-                target_cls = self.BDD_CATEGORY_MAP.get(category)
-                if not target_cls or "box2d" not in label:
+                if not isinstance(label, dict):
+                    continue
+                category = str(label.get("category", "")).lower().strip()
+                norm_cat = category.replace("-", " ").replace("_", " ")
+
+                # Filter specifically for octagonal stop signs rather than mapping all general traffic signs
+                if norm_cat in ("traffic sign", "trafficsign"):
+                    if self.is_octagonal_stop_sign(label, image=img):
+                        target_cls = "stop_sign"
+                    else:
+                        continue
+                else:
+                    target_cls = self.BDD_CATEGORY_MAP.get(category) or self.BDD_CATEGORY_MAP.get(norm_cat)
+
+                if not target_cls or target_cls not in CLASS_TO_ID:
                     continue
 
-                b = label["box2d"]
-                x1, y1, x2, y2 = b["x1"], b["y1"], b["x2"], b["y2"]
+                b = label.get("box2d")
+                if not isinstance(b, dict):
+                    continue
+
+                try:
+                    x1 = float(b["x1"])
+                    y1 = float(b["y1"])
+                    x2 = float(b["x2"])
+                    y2 = float(b["y2"])
+                except (KeyError, ValueError, TypeError):
+                    continue
+
+                x1, x2 = min(x1, x2), max(x1, x2)
+                y1, y2 = min(y1, y2), max(y1, y2)
+
                 # Assuming 1280x720 if not specified
-                w_img, h_img = 1280.0, 720.0
-                cx = ((x1 + x2) / 2.0) / w_img
-                cy = ((y1 + y2) / 2.0) / h_img
+                w_img, h_img = (float(img.shape[1]), float(img.shape[0])) if img is not None else (1280.0, 720.0)
+                if w_img <= 0.0 or h_img <= 0.0:
+                    continue
+
+                # Clip coordinates to image boundary
+                x1 = max(0.0, min(w_img, x1))
+                x2 = max(0.0, min(w_img, x2))
+                y1 = max(0.0, min(h_img, y1))
+                y2 = max(0.0, min(h_img, y2))
+
                 bw = (x2 - x1) / w_img
                 bh = (y2 - y1) / h_img
+                if bw <= 0.0 or bh <= 0.0:
+                    continue
+
+                cx = ((x1 + x2) / 2.0) / w_img
+                cy = ((y1 + y2) / 2.0) / h_img
 
                 cls_id = CLASS_TO_ID[target_cls]
                 yolo_lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
@@ -387,6 +557,7 @@ class SyntheticRoboticsGenerator:
     def build_dataset(self, output_root: str, train_count: int = 120, val_count: int = 30):
         """Build and save full YOLO dataset structure."""
         root = Path(output_root)
+        root.mkdir(parents=True, exist_ok=True)
         for split, count in [("train", train_count), ("val", val_count)]:
             img_dir = root / split / "images"
             lbl_dir = root / split / "labels"
@@ -422,7 +593,7 @@ class SyntheticRoboticsGenerator:
 
         # Write dataset.yaml for YOLO
         yaml_content = {
-            "path": str(root.resolve()).replace("\\", "/"),
+            "path": ".",
             "train": "train/images",
             "val": "val/images",
             "names": {i: name for i, name in enumerate(CLASS_NAMES)}

@@ -21,6 +21,7 @@ from geometry.distance_estimator import DistanceEstimator
 from geometry.homography import BirdEyeViewTransformer
 from geometry.optical_flow import ObstacleTracker
 from pipeline.annotator import NavigationAnnotator
+from pipeline.navigation_pipeline import RoboticsNavigationPipeline
 
 
 def run_demo():
@@ -33,10 +34,13 @@ def run_demo():
 
     # 1. Initialize Pipeline Modules
     cam_cfg = "configs/camera_params.yaml"
-    estimator = DistanceEstimator(cam_cfg)
-    bev = BirdEyeViewTransformer(1280, 720, 400, 400)
-    tracker = ObstacleTracker(fps=30.0)
-    annotator = NavigationAnnotator(draw_bev_inset=True, draw_ground_rays=True)
+    pipeline = RoboticsNavigationPipeline(
+        model_path="models/yolov8_navigation.pt",
+        backend="auto",
+        camera_config=cam_cfg,
+        enable_bev=True,
+        enable_tracking=True
+    )
 
     # 2. Generate a high-fidelity test scene with ground-truth objects
     gen = SyntheticRoboticsGenerator(cam_cfg)
@@ -46,51 +50,45 @@ def run_demo():
     # to demonstrate exact requested label format
     forced_scene = gen.draw_road_scene()
     demo_objects = [
-        {"class_name": "cone", "X": -0.6, "Z": 1.5, "draw": gen.draw_traffic_cone},
-        {"class_name": "barrier", "X": 1.2, "Z": 2.8, "draw": gen.draw_barrier},
-        {"class_name": "stop_sign", "X": 2.2, "Z": 3.2, "draw": gen.draw_stop_sign},
-        {"class_name": "cone", "X": 0.4, "Z": 6.5, "draw": gen.draw_traffic_cone}
+        {"class_name": "cone", "X": -0.3, "Z": 5.8, "draw": gen.draw_traffic_cone},
+        {"class_name": "cone", "X": 0.3, "Z": 3.6, "draw": gen.draw_traffic_cone},
+        {"class_name": "stop_sign", "X": 1.4, "Z": 3.0, "draw": gen.draw_stop_sign},
+        {"class_name": "barrier", "X": -1.4, "Z": 2.8, "draw": gen.draw_barrier},
     ]
 
     # Draw distant objects first (Z descending)
-    demo_objects.sort(key=lambda o: o["Z"], reverse=True)
-    simulated_detections = []
+    for obj in sorted(demo_objects, key=lambda o: o["Z"], reverse=True):
+        obj["draw"](forced_scene, obj["X"], obj["Z"])
 
     print("[1/4] Detecting navigation-relevant objects & estimating distance:")
     print("-----------------------------------------------------------------")
-    for obj in demo_objects:
-        box = obj["draw"](forced_scene, obj["X"], obj["Z"])
-        cname = obj["class_name"]
+    t0 = time.perf_counter()
+    annotated_frame, detections, telemetry = pipeline.process_frame(forced_scene)
+    measured_dt = time.perf_counter() - t0
 
-        # Estimate distance via geometry
-        dist_res = estimator.estimate_distance(cname, box, method="hybrid")
+    for det in detections:
+        cname = det["class_name"]
+        conf = det.get("confidence", 0.0)
+        label = det.get("formatted_label", "")
+        z = det.get("z", 0.0)
 
-        det_dict = {
-            "class_name": cname,
-            "bbox": box,
-            "confidence": 0.94,
-            "gt_distance": obj["Z"],
-            **dist_res
-        }
-        simulated_detections.append(det_dict)
-
-        err = abs(dist_res["z"] - obj["Z"])
-        print(f"  * Detected: {dist_res['formatted_label']:<18} | GT Distance: {obj['Z']:.1f}m | Error: {err:.2f}m")
+        # Match with closest ground truth object
+        matching_gt = [o for o in demo_objects if o["class_name"] == cname]
+        if matching_gt:
+            closest_gt = min(matching_gt, key=lambda o: abs(o["Z"] - z))
+            err = abs(z - closest_gt["Z"])
+            print(f"  * Detected: {label:<18} | Conf: {conf:.2f} | GT Distance: {closest_gt['Z']:.1f}m | Error: {err:.2f}m")
+        else:
+            print(f"  * Detected: {label:<18} | Conf: {conf:.2f} | Estimated Z: {z:.1f}m")
 
     # 3. Render Top-Down BEV Radar Map
     print("\n[2/4] Generating Bird's-Eye View (BEV) metric obstacle grid...")
-    radar_img = bev.render_radar_grid(simulated_detections)
+    radar_img = pipeline.bev.render_radar_grid(detections)
     cv2.imwrite("outputs/bev_radar_map.png", radar_img)
     print("      Saved: outputs/bev_radar_map.png")
 
     # 4. Render Final Annotated Camera Frame
     print("\n[3/4] Rendering annotated navigation frame with HUD telemetry...")
-    annotated_frame = annotator.annotate(
-        frame=forced_scene,
-        detections=simulated_detections,
-        fps=32.4,
-        radar_img=radar_img
-    )
     cv2.imwrite("outputs/demo_annotated.jpg", annotated_frame)
     print("      Saved: outputs/demo_annotated.jpg")
 
@@ -100,46 +98,43 @@ def run_demo():
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out_video = cv2.VideoWriter(video_path, fourcc, 20.0, (1280, 720))
 
-    # Simulate robot driving forward at 1.0 m/s for 30 frames (1.5 seconds)
+    # Simulate robot driving forward at 0.8 m/s for 40 frames (2.0 seconds)
     speed = 0.8  # m/s
     fps = 20.0
-    dt = 1.0 / fps
+    dt_sim = 1.0 / fps
+
+    # Reset tracker for clean video sequence
+    pipeline.tracker = ObstacleTracker(fps=fps)
 
     cur_objects = [
-        {"class_name": "cone", "X": -0.5, "Z": 6.0},
-        {"class_name": "barrier", "X": 1.4, "Z": 8.0},
-        {"class_name": "stop_sign", "X": 2.4, "Z": 12.0}
+        {"class_name": "cone", "X": -0.5, "Z": 5.5},
+        {"class_name": "barrier", "X": 1.2, "Z": 7.5},
+        {"class_name": "stop_sign", "X": 2.2, "Z": 10.5}
     ]
 
+    prev_time = time.perf_counter()
     for frame_idx in range(40):
         frame_img = gen.draw_road_scene()
-        frame_dets = []
 
         # Update Z positions
         for obj in sorted(cur_objects, key=lambda o: o["Z"], reverse=True):
-            z_curr = max(0.8, obj["Z"] - speed * (frame_idx * dt))
+            z_curr = max(0.8, obj["Z"] - speed * (frame_idx * dt_sim))
             x_curr = obj["X"]
             cname = obj["class_name"]
 
             if cname == "cone":
-                box = gen.draw_traffic_cone(frame_img, x_curr, z_curr)
+                gen.draw_traffic_cone(frame_img, x_curr, z_curr)
             elif cname == "stop_sign":
-                box = gen.draw_stop_sign(frame_img, x_curr, z_curr)
+                gen.draw_stop_sign(frame_img, x_curr, z_curr)
             else:
-                box = gen.draw_barrier(frame_img, x_curr, z_curr)
+                gen.draw_barrier(frame_img, x_curr, z_curr)
 
-            dist_res = estimator.estimate_distance(cname, box, method="hybrid")
-            frame_dets.append({
-                "class_name": cname,
-                "bbox": box,
-                "confidence": 0.92,
-                **dist_res
-            })
+        # Measure elapsed time and process frame with RoboticsNavigationPipeline
+        now = time.perf_counter()
+        measured_dt = now - prev_time if frame_idx > 0 else dt_sim
+        prev_time = now
 
-        # Track and compute TTC
-        tracked_dets = tracker.update(frame_img, frame_dets)
-        radar_frame = bev.render_radar_grid(tracked_dets)
-        rendered_frame = annotator.annotate(frame_img, tracked_dets, fps=28.5, radar_img=radar_frame)
+        rendered_frame, tracked_dets, telem = pipeline.process_frame(frame_img, dt=measured_dt)
         out_video.write(rendered_frame)
 
     out_video.release()

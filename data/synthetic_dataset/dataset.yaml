@@ -1,4 +1,4 @@
-path: C:/Users/vhari/.gemini/antigravity/scratch/robotics_navigation/data/synthetic_dataset
+path: .
 train: train/images
 val: val/images
 names:

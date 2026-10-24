@@ -6,10 +6,12 @@ Designed for embedded robotics controllers: NVIDIA Jetson Nano/Orin, Raspberry P
 
 import time
 import argparse
-from typing import List, Dict, Any, Tuple
+from pathlib import Path
+from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 import cv2
 import onnxruntime as ort
+import yaml
 
 CLASS_NAMES = ["cone", "barrier", "stop_sign"]
 
@@ -27,6 +29,18 @@ OBJECT_WIDTHS = {
 }
 
 
+class _DefaultFloat(float):
+    pass
+
+
+_DEFAULT_PITCH = _DefaultFloat(0.0)
+_DEFAULT_FX = _DefaultFloat(960.0)
+_DEFAULT_FY = _DefaultFloat(960.0)
+_DEFAULT_CX = _DefaultFloat(640.0)
+_DEFAULT_CY = _DefaultFloat(360.0)
+_DEFAULT_CAM_HEIGHT = _DefaultFloat(1.0)
+
+
 class EdgeInferenceEngine:
     """
     Ultra-lightweight edge detector & geometric distance estimator.
@@ -37,19 +51,54 @@ class EdgeInferenceEngine:
         onnx_model_path: str,
         conf_thresh: float = 0.35,
         iou_thresh: float = 0.45,
-        fx: float = 960.0,
-        fy: float = 960.0,
-        cx: float = 640.0,
-        cy: float = 360.0,
-        cam_height: float = 1.0
+        fx: float = _DEFAULT_FX,
+        fy: float = _DEFAULT_FY,
+        cx: float = _DEFAULT_CX,
+        cy: float = _DEFAULT_CY,
+        cam_height: float = _DEFAULT_CAM_HEIGHT,
+        camera_pitch: float = _DEFAULT_PITCH,
+        config_path: Optional[str] = "configs/camera_params.yaml"
     ):
         self.conf_thresh = conf_thresh
         self.iou_thresh = iou_thresh
-        self.fx = fx
-        self.fy = fy
-        self.cx = cx
-        self.cy = cy
-        self.cam_height = cam_height
+        self.fx = 960.0
+        self.fy = 960.0
+        self.cx = 640.0
+        self.cy = 360.0
+        self.image_width = 1280
+        self.image_height = 720
+        self.cam_height = 1.0
+        self.camera_pitch = 0.0
+
+        self.object_heights = dict(OBJECT_HEIGHTS)
+        self.object_widths = dict(OBJECT_WIDTHS)
+        self.object_heights["stopsign"] = self.object_heights.get("stop_sign", 0.75)
+        self.object_widths["stopsign"] = self.object_widths.get("stop_sign", 0.75)
+
+        # Load camera parameters from configs/camera_params.yaml if available
+        if config_path:
+            p = Path(config_path)
+            if not p.is_absolute() and not p.exists():
+                repo_root = Path(__file__).resolve().parent.parent
+                alt_p = repo_root / config_path
+                if alt_p.exists():
+                    p = alt_p
+            if p.exists():
+                self._load_config(str(p))
+
+        # Explicit parameter overrides if provided by caller
+        if fx is not _DEFAULT_FX and fx is not None:
+            self.fx = float(fx)
+        if fy is not _DEFAULT_FY and fy is not None:
+            self.fy = float(fy)
+        if cx is not _DEFAULT_CX and cx is not None:
+            self.cx = float(cx)
+        if cy is not _DEFAULT_CY and cy is not None:
+            self.cy = float(cy)
+        if cam_height is not _DEFAULT_CAM_HEIGHT and cam_height is not None:
+            self.cam_height = float(cam_height)
+        if camera_pitch is not _DEFAULT_PITCH and camera_pitch is not None:
+            self.camera_pitch = float(camera_pitch)
 
         # Setup ONNX Runtime Session
         sess_options = ort.SessionOptions()
@@ -63,6 +112,46 @@ class EdgeInferenceEngine:
         self.session = ort.InferenceSession(onnx_model_path, sess_options, providers=active)
         self.input_name = self.session.get_inputs()[0].name
         self.input_shape = self.session.get_inputs()[0].shape
+
+    def _load_config(self, config_path: str):
+        """Load camera intrinsics, extrinsics, and object dimensions from YAML config."""
+        try:
+            with open(config_path, "r") as f:
+                cfg = yaml.safe_load(f)
+            if not cfg:
+                return
+            cam = cfg.get("camera", {})
+            if "fx" in cam:
+                self.fx = float(cam["fx"])
+            if "fy" in cam:
+                self.fy = float(cam["fy"])
+            if "cx" in cam:
+                self.cx = float(cam["cx"])
+            if "cy" in cam:
+                self.cy = float(cam["cy"])
+            if "image_width" in cam:
+                self.image_width = int(cam["image_width"])
+            if "image_height" in cam:
+                self.image_height = int(cam["image_height"])
+            if "camera_height" in cam:
+                self.cam_height = float(cam["camera_height"])
+            elif "cam_height" in cam:
+                self.cam_height = float(cam["cam_height"])
+            if "camera_pitch" in cam:
+                self.camera_pitch = float(cam["camera_pitch"])
+
+            objs = cfg.get("object_dimensions", {})
+            for name, specs in objs.items():
+                norm = name.lower().replace(" ", "_")
+                if "height" in specs:
+                    self.object_heights[norm] = float(specs["height"])
+                if "width" in specs:
+                    self.object_widths[norm] = float(specs["width"])
+                if norm == "stop_sign":
+                    self.object_heights["stopsign"] = self.object_heights[norm]
+                    self.object_widths["stopsign"] = self.object_widths[norm]
+        except Exception:
+            pass
 
     def preprocess(self, img: np.ndarray, target_size: int = 640) -> Tuple[np.ndarray, float, Tuple[int, int]]:
         """Letterbox pre-processing."""
@@ -81,35 +170,91 @@ class EdgeInferenceEngine:
         blob = np.expand_dims(blob, axis=0)
         return blob, scale, (pad_x, pad_y)
 
-    def estimate_distance(self, cls_name: str, bbox: List[int], img_h: int = 720, img_w: int = 1280) -> float:
+    def estimate_distance(self, cls_name: str, bbox: List[int], img_h: Optional[int] = None, img_w: Optional[int] = None) -> float:
         """Fast geometric distance estimation using multi-cue fusion with truncation handling."""
-        x1, y1, x2, y2 = bbox
+        if bbox is None or len(bbox) != 4:
+            return 50.0
+
+        try:
+            x1, y1, x2, y2 = bbox
+            if any(isinstance(v, bool) for v in [x1, y1, x2, y2]):
+                return 50.0
+            coords = [float(v) for v in [x1, y1, x2, y2]]
+            if not all(np.isfinite(c) for c in coords):
+                return 50.0
+        except (TypeError, ValueError, IndexError):
+            return 50.0
+
+        x1, y1, x2, y2 = coords
+        if x2 <= x1 or y2 <= y1:
+            return 50.0
+
+        h_orig = img_h if img_h is not None else self.image_height
+        w_orig = img_w if img_w is not None else self.image_width
+
         bw = max(1.0, float(x2 - x1))
         bh = max(1.0, float(y2 - y1))
-        bottom_clipped = y2 >= (img_h - 3)
-        horiz_clipped = (x1 <= 3) or (x2 >= img_w - 3)
+        bottom_clipped = y2 >= (h_orig - 3)
+        horiz_clipped = (x1 <= 3) or (x2 >= w_orig - 3)
 
-        real_w = OBJECT_WIDTHS.get(cls_name, 0.50)
+        norm_name = str(cls_name).lower().replace(" ", "_")
+        if norm_name == "stopsign":
+            norm_name = "stop_sign"
+
+        real_w = self.object_widths.get(norm_name, OBJECT_WIDTHS.get(norm_name, 0.50))
         z_w = (self.fx * real_w) / bw
 
         aspect = bh / bw
-        if cls_name == "stop_sign":
+        if norm_name == "stop_sign":
             real_h = 2.05 if aspect > 1.6 else 0.75
         else:
-            real_h = OBJECT_HEIGHTS.get(cls_name, 0.70)
+            real_h = self.object_heights.get(norm_name, OBJECT_HEIGHTS.get(norm_name, 0.70))
         z_h = (self.fy * real_h) / bh
 
-        dy = max(1.0, float(y2 - self.cy))
-        z_ground = self.cam_height / np.tan(np.arctan2(dy, self.fy))
+        # Ground FOV limit at bottom of image
+        dy_bot = max(1.0, float(h_orig - 1 - self.cy))
+        alpha_bot = np.arctan2(dy_bot, self.fy)
+        total_bot_pitch = self.camera_pitch + alpha_bot
+        z_bottom_fov = self.cam_height / np.tan(total_bot_pitch) if total_bot_pitch > 0.01 else 2.67
+
+        # Ground contact ray: when object bottom is at or above horizon (y2 <= cy),
+        # ground contact weight is set to 0.0, avoiding 80m fallback inflation.
+        if y2 <= self.cy:
+            z_ground = 80.0
+            ground_valid = False
+        else:
+            dy = float(y2 - self.cy)
+            total_pitch = self.camera_pitch + np.arctan2(dy, self.fy)
+            if total_pitch <= 0.01:
+                z_ground = 80.0
+                ground_valid = False
+            else:
+                z_ground = self.cam_height / np.tan(total_pitch)
+                ground_valid = True
 
         if bottom_clipped:
-            z = min(z_w if not horiz_clipped else 2.67, 2.67)
+            z = min(z_w if not horiz_clipped else z_bottom_fov, z_bottom_fov)
         elif horiz_clipped:
-            z = 0.60 * z_h + 0.40 * z_ground if cls_name != "stop_sign" or aspect > 1.6 else z_h
-        elif cls_name == "stop_sign":
-            z = 0.45 * z_w + 0.35 * z_h + 0.20 * z_ground if aspect > 1.6 else 0.50 * z_w + 0.50 * z_h
+            if ground_valid and (norm_name != "stop_sign" or aspect > 1.6):
+                z = 0.60 * z_h + 0.40 * z_ground
+            else:
+                z = z_h
+        elif norm_name == "stop_sign":
+            if aspect > 1.6 and ground_valid:
+                z = 0.45 * z_w + 0.35 * z_h + 0.20 * z_ground
+            else:
+                z = 0.50 * z_w + 0.50 * z_h
+        elif norm_name == "barrier":
+            if ground_valid:
+                z = 0.30 * z_w + 0.35 * z_h + 0.35 * z_ground
+            else:
+                z = (0.30 * z_w + 0.35 * z_h) / 0.65
         else:
-            z = 0.35 * z_w + 0.30 * z_h + 0.35 * z_ground
+            if ground_valid:
+                z = 0.35 * z_w + 0.30 * z_h + 0.35 * z_ground
+            else:
+                # Set ground contact weight to 0.0, avoiding 80m fallback inflation
+                z = (0.35 * z_w + 0.30 * z_h) / 0.65
 
         return float(np.clip(z, 0.3, 50.0))
 

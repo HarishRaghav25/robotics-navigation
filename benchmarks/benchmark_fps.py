@@ -25,6 +25,9 @@ except ImportError:
     ort = None
 
 
+ROOT = Path(__file__).resolve().parent.parent
+
+
 def benchmark_pytorch(
     model_path: str,
     device: str = "cpu",
@@ -36,25 +39,31 @@ def benchmark_pytorch(
     if YOLO is None:
         raise ImportError("Ultralytics required for PyTorch benchmarking.")
 
+    model_p = Path(model_path)
+    if not model_p.exists() and (ROOT / model_path).exists():
+        model_path = str(ROOT / model_path)
+
     model = YOLO(model_path)
     dummy_input = np.random.randint(0, 255, (img_size, img_size, 3), dtype=np.uint8)
 
-    dev_name = 0 if "cuda" in device else "cpu"
+    is_cuda = "cuda" in device.lower() and torch.cuda.is_available()
+    dev_name = 0 if is_cuda else "cpu"
+    reported_device = "CUDA" if is_cuda else "CPU"
 
     # Warmup
     for _ in range(warmup):
         _ = model(dummy_input, device=dev_name, verbose=False)
 
-    if "cuda" in device:
+    if is_cuda:
         torch.cuda.synchronize()
 
     times = []
     for _ in range(iterations):
-        if "cuda" in device:
+        if is_cuda:
             torch.cuda.synchronize()
         t0 = time.perf_counter()
         _ = model(dummy_input, device=dev_name, verbose=False)
-        if "cuda" in device:
+        if is_cuda:
             torch.cuda.synchronize()
         t1 = time.perf_counter()
         times.append((t1 - t0) * 1000.0)  # ms
@@ -67,7 +76,7 @@ def benchmark_pytorch(
     return {
         "model": Path(model_path).name,
         "framework": "PyTorch",
-        "device": device.upper(),
+        "device": reported_device,
         "mean_latency_ms": round(mean_lat, 2),
         "std_latency_ms": round(float(np.std(times)), 2),
         "p50_ms": round(float(np.percentile(times, 50)), 2),
@@ -88,17 +97,48 @@ def benchmark_onnx(
     if ort is None:
         raise ImportError("onnxruntime required for ONNX benchmarking.")
 
+    model_p = Path(onnx_path)
+    if not model_p.exists() and (ROOT / onnx_path).exists():
+        onnx_path = str(ROOT / onnx_path)
+
     sess_options = ort.SessionOptions()
     sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     sess_options.intra_op_num_threads = 4
 
-    providers = ["CUDAExecutionProvider"] if "cuda" in device else ["CPUExecutionProvider"]
+    if "cuda" in device.lower():
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    else:
+        providers = ["CPUExecutionProvider"]
     avail = ort.get_available_providers()
     active_providers = [p for p in providers if p in avail]
     if not active_providers:
         active_providers = ["CPUExecutionProvider"]
 
-    session = ort.InferenceSession(onnx_path, sess_options, providers=active_providers)
+    try:
+        session = ort.InferenceSession(onnx_path, sess_options, providers=active_providers)
+    except Exception as e:
+        if "cuda" in device.lower():
+            print(f"[benchmark_onnx] CUDA session creation failed ({e}), falling back to CPUExecutionProvider.")
+            active_providers = ["CPUExecutionProvider"]
+            session = ort.InferenceSession(onnx_path, sess_options, providers=active_providers)
+        else:
+            raise
+
+    # Verify active execution providers before reporting device as CUDA
+    session_providers = session.get_providers()
+    is_cuda = "CUDAExecutionProvider" in session_providers
+
+    if "cuda" in device.lower() and not is_cuda:
+        print(
+            f"[benchmark_onnx] Warning: CUDA requested, but 'CUDAExecutionProvider' "
+            f"is not active in session providers ({session_providers}). Reporting device as CPU."
+        )
+        reported_device = "CPU"
+    elif is_cuda:
+        reported_device = "CUDA"
+    else:
+        reported_device = "CPU"
+
     input_name = session.get_inputs()[0].name
 
     dummy_blob = np.random.randn(1, 3, img_size, img_size).astype(np.float32)
@@ -107,10 +147,17 @@ def benchmark_onnx(
     for _ in range(warmup):
         _ = session.run(None, {input_name: dummy_blob})
 
+    if is_cuda and torch.cuda.is_available():
+        torch.cuda.synchronize()
+
     times = []
     for _ in range(iterations):
+        if is_cuda and torch.cuda.is_available():
+            torch.cuda.synchronize()
         t0 = time.perf_counter()
         _ = session.run(None, {input_name: dummy_blob})
+        if is_cuda and torch.cuda.is_available():
+            torch.cuda.synchronize()
         t1 = time.perf_counter()
         times.append((t1 - t0) * 1000.0)
 
@@ -122,7 +169,7 @@ def benchmark_onnx(
     return {
         "model": Path(onnx_path).name,
         "framework": "ONNX Runtime",
-        "device": device.upper(),
+        "device": reported_device,
         "mean_latency_ms": round(mean_lat, 2),
         "std_latency_ms": round(float(np.std(times)), 2),
         "p50_ms": round(float(np.percentile(times, 50)), 2),
@@ -188,6 +235,21 @@ def run_full_benchmark(
         results.append(res)
         print(f"      Latency: {res['mean_latency_ms']} ms | FPS: {res['fps']} | Size: {res['file_size_mb']} MB")
 
+    # 6. ONNX FP32 on GPU (CUDA)
+    if cuda_avail and fp32_onnx and Path(fp32_onnx).exists():
+        print("[6/6] Benchmarking ONNX FP32 on GPU (CUDA)...")
+        try:
+            res = benchmark_onnx(fp32_onnx, device="cuda")
+            if res["device"] == "CUDA":
+                results.append(res)
+                print(f"      Latency: {res['mean_latency_ms']} ms | FPS: {res['fps']} | Size: {res['file_size_mb']} MB")
+            else:
+                print("      ONNX CUDA provider not active in session. Skipping ONNX GPU entry.")
+        except Exception as e:
+            print(f"      Skipping ONNX GPU benchmark: {e}")
+    else:
+        print("[6/6] GPU not available. Skipping ONNX GPU benchmark.")
+
     # Save JSON results
     Path(output_json).parent.mkdir(parents=True, exist_ok=True)
     with open(output_json, "w") as f:
@@ -221,9 +283,19 @@ def run_full_benchmark(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Run edge benchmarking")
-    parser.add_argument("--model", type=str, default="models/yolov8_navigation.pt")
-    parser.add_argument("--onnx", type=str, default="models/yolov8_navigation.onnx")
-    parser.add_argument("--int8", type=str, default="models/yolov8_navigation_int8.onnx")
+    parser.add_argument("--model", type=str, default="models/yolov8_navigation.pt", help="Path to PyTorch model")
+    parser.add_argument("--pruned", type=str, default="models/yolov8_pruned.pt", help="Path to pruned model")
+    parser.add_argument("--onnx", type=str, default="models/yolov8_navigation.onnx", help="Path to FP32 ONNX model")
+    parser.add_argument("--int8", type=str, default="models/yolov8_navigation_int8.onnx", help="Path to INT8 ONNX model")
+    parser.add_argument("--output-json", type=str, default="outputs/benchmark_results.json", help="Path to output JSON")
+    parser.add_argument("--output-md", type=str, default="outputs/benchmark_report.md", help="Path to output markdown")
     args = parser.parse_args()
 
-    run_full_benchmark(pt_model=args.model, fp32_onnx=args.onnx, int8_onnx=args.int8)
+    run_full_benchmark(
+        pt_model=args.model,
+        pruned_pt=args.pruned,
+        fp32_onnx=args.onnx,
+        int8_onnx=args.int8,
+        output_json=args.output_json,
+        output_md=args.output_md
+    )

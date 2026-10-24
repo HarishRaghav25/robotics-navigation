@@ -2,11 +2,11 @@
 
 | Model Variant | Framework | Device | Mean Latency (ms) | P50 (ms) | P95 (ms) | FPS | File Size (MB) |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **yolov8_navigation.pt** | PyTorch | CPU | 103.51 | 103.62 | 113.34 | **9.7** | 5.94 |
-| **yolov8_navigation.pt** | PyTorch | CUDA | 20.69 | 18.51 | 34.99 | **48.3** | 5.94 |
-| **YOLOv8n (Pruned 30%)** | PyTorch | CPU | 100.74 | 99.77 | 110.56 | **9.9** | 11.74 |
-| **yolov8_navigation.onnx** | ONNX Runtime | CPU | 58.72 | 57.16 | 68.78 | **17.0** | 11.67 |
-| **yolov8_navigation_int8.onnx** | ONNX Runtime | CPU | 639.35 | 624.54 | 744.23 | **1.6** | 3.19 |
+| **yolov8_navigation.pt** | PyTorch | CPU | 24.26 | 23.31 | 35.04 | **41.2** | 5.94 |
+| **yolov8_navigation.pt** | PyTorch | CUDA | 3.93 | 3.84 | 4.91 | **254.5** | 5.94 |
+| **YOLOv8n (Pruned 30%)** | PyTorch | CPU | 21.96 | 20.31 | 36.44 | **45.5** | 5.95 |
+| **yolov8_navigation.onnx** | ONNX Runtime | CPU | 24.68 | 24.49 | 25.99 | **40.5** | 11.67 |
+| **yolov8_navigation_int8.onnx** | ONNX Runtime | CPU | 86.5 | 86.28 | 92.81 | **11.6** | 3.19 |
 
 ### Key Takeaways for Edge Robotics:
 - **INT8 Quantization** achieves ~3x-4x model compression compared to standard FP32 weights.

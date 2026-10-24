@@ -18,9 +18,15 @@ class NavigationAnnotator:
     and optional Bird's-Eye View radar overlays on camera frames.
     """
 
-    def __init__(self, draw_bev_inset: bool = True, draw_ground_rays: bool = True):
+    def __init__(
+        self,
+        draw_bev_inset: bool = True,
+        draw_ground_rays: bool = True,
+        show_confidence: bool = True
+    ):
         self.draw_bev_inset = draw_bev_inset
         self.draw_ground_rays = draw_ground_rays
+        self.show_confidence = show_confidence
 
         # Color palette (BGR)
         self.color_critical = (30, 30, 230)     # Red (< 2.0m)
@@ -160,6 +166,20 @@ class NavigationAnnotator:
                 label = f"{display_name}, {dist:.1f}m"
 
             self.draw_text_badge(out, label, (bbox[0], max(20, bbox[1] - 4)), color)
+
+            # Display detection confidence score badge if available
+            conf = det.get("confidence")
+            if getattr(self, "show_confidence", True) and conf is not None:
+                conf_badge = f"Conf: {conf:.2f}"
+                conf_y = (bbox[1] + 18) if (bbox[3] >= h_frame - 25) else min(h_frame - 6, bbox[3] + 16)
+                self.draw_text_badge(
+                    out,
+                    conf_badge,
+                    (bbox[0], conf_y),
+                    bg_color=(35, 40, 45),
+                    text_color=(220, 240, 255),
+                    font_scale=0.45
+                )
 
         # Draw Telemetry Header Bar
         cv2.rectangle(out, (0, 0), (w_frame, 38), (20, 24, 28), -1)

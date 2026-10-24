@@ -140,3 +140,201 @@ class TestGeometry:
         assert pytest.approx(flow_vec[0], abs=2.0) == 10.0
         assert pytest.approx(flow_vec[1], abs=2.0) == 6.0
         assert up2[0]["optical_flow_points"] > 0
+
+    def test_class_name_normalization(self):
+        # "stop sign" with a space should normalize to "stop_sign"
+        bh = 144.0
+        z_h = self.estimator.estimate_pinhole_height("stop sign", bh)
+        assert pytest.approx(z_h, rel=1e-2) == 5.0
+
+        bw = 144.0
+        z_w = self.estimator.estimate_pinhole_width("stop sign", bw)
+        assert pytest.approx(z_w, rel=1e-2) == 5.0
+
+    def test_estimate_distance_input_validation(self):
+        # Non-finite coordinates
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [100, float("nan"), 200, 300])
+
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [100, 100, float("inf"), 300])
+
+        # Degenerate bbox (x2 <= x1 or y2 <= y1)
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [200, 100, 100, 300])
+
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [100, 300, 200, 200])
+
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [100, 100, 100, 200])
+
+        # Wrong length
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [100, 100, 200])
+
+    def test_optical_flow_dynamic_dt(self):
+        tracker = ObstacleTracker(fps=30.0)
+        frame1 = np.zeros((720, 1280, 3), dtype=np.uint8)
+        frame2 = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+        # Initial detection at Z = 10.0m
+        dets1 = [{"class_name": "cone", "bbox": [500, 300, 600, 450], "z": 10.0}]
+        tracker.update(frame1, dets1)
+
+        # In dt = 0.1s, cone moved to Z = 8.0m (dz = 2.0m -> vz = 2.0 / 0.1 = 20.0 m/s)
+        dets2 = [{"class_name": "cone", "bbox": [500, 300, 600, 460], "z": 8.0}]
+        up2 = tracker.update(frame2, dets2, dt=0.1)
+        assert len(up2) == 1
+        # Raw vz = 20.0 m/s, smoothed vz = 0.7 * 20 + 0.3 * 0 = 14.0 m/s
+        assert pytest.approx(up2[0]["vz"], rel=1e-2) == 14.0
+
+    def test_obstacle_tracker_coasting(self):
+        tracker = ObstacleTracker(fps=30.0, max_age=5)
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+        # Frame 1: Detection at Z = 10.0m
+        dets1 = [{"class_name": "cone", "bbox": [500, 300, 600, 450], "z": 10.0, "x": 0.0}]
+        tracker.update(frame, dets1)
+
+        # Frame 2: Cone moves to Z = 8.0m at dt = 0.1s (vz = 20 m/s, smoothed = 14 m/s)
+        dets2 = [{"class_name": "cone", "bbox": [500, 300, 600, 460], "z": 8.0, "x": 0.0}]
+        up2 = tracker.update(frame, dets2, dt=0.1)
+        assert up2[0]["track_id"] == 1
+        assert up2[0]["vz"] > 0
+
+        # Coasting for frames 3 to 7 (5 missed frames)
+        for i in range(1, 6):
+            coasted_dets = tracker.update(frame, [], dt=0.1)
+            assert len(coasted_dets) == 1, f"Track should coast on missed frame {i}"
+            assert coasted_dets[0]["track_id"] == 1
+            assert coasted_dets[0]["coasted"] is True
+            assert coasted_dets[0]["missed_frames"] == i
+            # Z should decrease as obstacle approaches with positive vz
+            assert coasted_dets[0]["z"] < 8.0
+            # TTC should be updated and not reset to 99.9
+            assert coasted_dets[0]["ttc"] < 50.0
+
+        # Frame 8 (6th missed frame > max_age 5): track should be dropped
+        expired_dets = tracker.update(frame, [], dt=0.1)
+        assert len(expired_dets) == 0
+
+    def test_track_coasting_reacquisition(self):
+        """Test that a coasted track seamlessly re-associates when the detector re-acquires the object."""
+        tracker = ObstacleTracker(fps=30.0, max_age=5)
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+        # Frame 1: Initial detection at Z = 10.0m
+        dets1 = [{"class_name": "stop_sign", "bbox": [500, 300, 600, 450], "z": 10.0, "x": 0.0}]
+        up1 = tracker.update(frame, dets1, dt=0.1)
+        assert up1[0]["track_id"] == 1
+
+        # Frame 2: Obstacle moves to Z = 8.0m (vz = 20 m/s, smoothed = 14 m/s)
+        dets2 = [{"class_name": "stop_sign", "bbox": [500, 300, 600, 450], "z": 8.0, "x": 0.0}]
+        up2 = tracker.update(frame, dets2, dt=0.1)
+        assert up2[0]["track_id"] == 1
+        assert up2[0]["vz"] > 0
+
+        # Frame 3: Detector dropout (coasting frame 1)
+        up3 = tracker.update(frame, [], dt=0.1)
+        assert len(up3) == 1
+        assert up3[0]["track_id"] == 1
+        assert up3[0]["coasted"] is True
+        assert up3[0]["missed_frames"] == 1
+
+        # Frame 4: Detector re-acquires object at Z = 5.2m (approx 8.0 - 2 * 1.4)
+        dets4 = [{"class_name": "stop sign", "bbox": [500, 300, 600, 450], "z": 5.2, "x": 0.0}]
+        up4 = tracker.update(frame, dets4, dt=0.1)
+        assert len(up4) == 1
+        assert up4[0]["track_id"] == 1
+        assert up4[0].get("coasted", False) is False
+        assert tracker.tracks[1]["missed_frames"] == 0
+        assert up4[0]["vz"] > 0
+        assert up4[0]["ttc"] < 10.0
+
+    def test_optical_flow_narrow_box_guard(self):
+        tracker = ObstacleTracker(fps=30.0)
+        prev_gray = np.zeros((720, 1280), dtype=np.uint8)
+        curr_gray = np.zeros((720, 1280), dtype=np.uint8)
+
+        # Bounding box narrower than 8 px (width = 4 px)
+        bbox = [100, 100, 104, 150]
+        flow_vec, ttc, npts = tracker.compute_optical_flow(prev_gray, curr_gray, bbox)
+        assert isinstance(flow_vec, tuple)
+        assert len(flow_vec) == 2
+        assert isinstance(ttc, float)
+
+        # Bounding box exactly 8 px wide (should not collapse to single point)
+        bbox_8 = [100, 100, 108, 150]
+        flow_vec_8, ttc_8, npts_8 = tracker.compute_optical_flow(prev_gray, curr_gray, bbox_8)
+        assert isinstance(flow_vec_8, tuple)
+        assert len(flow_vec_8) == 2
+
+        # Empty/None frames
+        flow_vec_none, ttc_none, npts_none = tracker.compute_optical_flow(None, curr_gray, bbox)
+        assert flow_vec_none == (0.0, 0.0)
+
+    def test_class_name_normalization_variations(self):
+        # Test case variations: "Stop Sign", "STOP SIGN", "stopsign", "stop sign"
+        variations = ["stop sign", "Stop Sign", "STOP SIGN", "stopsign", "stop_sign"]
+        for var in variations:
+            zh = self.estimator.estimate_pinhole_height(var, 144.0)
+            zw = self.estimator.estimate_pinhole_width(var, 144.0)
+            assert pytest.approx(zh, rel=1e-2) == 5.0
+            assert pytest.approx(zw, rel=1e-2) == 5.0
+            dist_res = self.estimator.estimate_distance(var, [500, 100, 725, 325])
+            assert "Stop Sign, " in dist_res["formatted_label"]
+
+    def test_estimate_distance_input_validation_comprehensive(self):
+        # None and length invalid
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", None)
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [100, 100, 200])
+
+        # Boolean in bbox
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [True, 100, 200, 300])
+
+        # String in bbox
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", ["invalid", 100, 200, 300])
+
+        # Degenerate boxes: x2 == x1, y2 == y1, x2 < x1, y2 < y1
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [100, 100, 100, 200])
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [100, 100, 200, 100])
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [200, 100, 100, 200])
+        with pytest.raises(ValueError):
+            self.estimator.estimate_distance("cone", [100, 200, 200, 100])
+
+    def test_edge_infer_camera_pitch_and_horizon(self):
+        import inspect
+        from edge_deploy.edge_infer import EdgeInferenceEngine
+        sig = inspect.signature(EdgeInferenceEngine.__init__)
+        assert "camera_pitch" in sig.parameters
+        assert sig.parameters["camera_pitch"].default == 0.0
+
+        engine = EdgeInferenceEngine(
+            "models/yolov8_navigation_int8.onnx",
+            camera_pitch=0.05
+        )
+        assert engine.camera_pitch == 0.05
+
+        # Bounding box above horizon (y2 = 300 <= cy = 360)
+        # Ground contact weight must be 0.0, avoiding 80m fallback inflation
+        dist_cone = engine.estimate_distance("cone", [100, 200, 200, 300])
+        assert dist_cone < 15.0
+
+        dist_barrier = engine.estimate_distance("barrier", [100, 200, 200, 300])
+        assert dist_barrier < 20.0
+
+        # Dynamic FOV cutoff at bottom calculation test
+        # dy_bot = 720 - 1 - 360 = 359
+        # alpha_bot = atan2(359, 960)
+        # pitch = 0.0 -> z_bottom_fov = 1.0 / tan(alpha_bot) = 960 / 359 = 2.674m
+        engine_flat = EdgeInferenceEngine("models/yolov8_navigation_int8.onnx", camera_pitch=0.0)
+        clipped_dist = engine_flat.estimate_distance("cone", [100, 500, 300, 719])
+        assert clipped_dist <= 2.70

@@ -10,6 +10,7 @@ import math
 import yaml
 from pathlib import Path
 from typing import Dict, Tuple, Optional, Any, List
+import numpy as np
 
 
 class DistanceEstimator:
@@ -35,7 +36,8 @@ class DistanceEstimator:
         self.object_specs: Dict[str, Dict[str, float]] = {
             "cone": {"height": 0.70, "width": 0.38, "min_dist": 0.3, "max_dist": 50.0},
             "barrier": {"height": 0.85, "width": 1.60, "min_dist": 0.5, "max_dist": 60.0},
-            "stop_sign": {"height": 0.75, "width": 0.75, "min_dist": 0.5, "max_dist": 70.0}
+            "stop_sign": {"height": 0.75, "width": 0.75, "min_dist": 0.5, "max_dist": 70.0},
+            "stopsign": {"height": 0.75, "width": 0.75, "min_dist": 0.5, "max_dist": 70.0}
         }
 
         if config_path and Path(config_path).exists():
@@ -57,18 +59,24 @@ class DistanceEstimator:
 
         objs = cfg.get("object_dimensions", {})
         for name, specs in objs.items():
-            self.object_specs[name] = specs
+            norm = name.lower().replace(" ", "_")
+            self.object_specs[norm] = specs
+            if norm == "stop_sign":
+                self.object_specs["stopsign"] = specs
 
     def estimate_pinhole_height(self, class_name: str, bbox_height: float) -> float:
         """
         Estimate distance Z based on vertical pinhole projection:
         Z = (fy * RealHeight) / BboxHeight
         """
-        if bbox_height <= 1.0:
+        if not isinstance(bbox_height, (int, float, np.floating, np.integer)) or isinstance(bbox_height, bool) or not math.isfinite(float(bbox_height)) or float(bbox_height) <= 1.0:
             return 99.0
-        spec = self.object_specs.get(class_name.lower(), {"height": 0.70})
+        norm_name = class_name.lower().replace(" ", "_")
+        if norm_name == "stopsign":
+            norm_name = "stop_sign"
+        spec = self.object_specs.get(norm_name, {"height": 0.70})
         real_h = spec.get("height", 0.70)
-        z = (self.fy * real_h) / bbox_height
+        z = (self.fy * real_h) / float(bbox_height)
         return z
 
     def estimate_pinhole_width(self, class_name: str, bbox_width: float) -> float:
@@ -76,11 +84,14 @@ class DistanceEstimator:
         Estimate distance Z based on horizontal pinhole projection:
         Z = (fx * RealWidth) / BboxWidth
         """
-        if bbox_width <= 1.0:
+        if not isinstance(bbox_width, (int, float, np.floating, np.integer)) or isinstance(bbox_width, bool) or not math.isfinite(float(bbox_width)) or float(bbox_width) <= 1.0:
             return 99.0
-        spec = self.object_specs.get(class_name.lower(), {"width": 0.50})
+        norm_name = class_name.lower().replace(" ", "_")
+        if norm_name == "stopsign":
+            norm_name = "stop_sign"
+        spec = self.object_specs.get(norm_name, {"width": 0.50})
         real_w = spec.get("width", 0.50)
-        z = (self.fx * real_w) / bbox_width
+        z = (self.fx * real_w) / float(bbox_width)
         return z
 
     def estimate_ground_plane(self, y_bottom: float) -> float:
@@ -90,8 +101,11 @@ class DistanceEstimator:
         total_pitch = camera_pitch + alpha
         Z = camera_height / tan(total_pitch)
         """
+        if not isinstance(y_bottom, (int, float, np.floating, np.integer)) or isinstance(y_bottom, bool) or not math.isfinite(float(y_bottom)):
+            return 80.0
+
         # Pixel offset below principal point
-        dy = y_bottom - self.cy
+        dy = float(y_bottom) - self.cy
         if dy <= 1.0:
             # At or above horizon
             return 80.0
@@ -124,11 +138,29 @@ class DistanceEstimator:
         Returns:
             Dictionary with distance, z, x, and formatted_label e.g. "Cone, 1.5m", "Stop Sign, 3.2m"
         """
-        x1, y1, x2, y2 = bbox
+        if bbox is None or len(bbox) != 4:
+            raise ValueError(f"Bounding box must contain exactly 4 coordinates [x1, y1, x2, y2], got {bbox}")
+
+        try:
+            x1, y1, x2, y2 = bbox
+            if any(isinstance(v, bool) for v in [x1, y1, x2, y2]):
+                raise TypeError("Booleans are not valid coordinates")
+            coords = [float(v) for v in [x1, y1, x2, y2]]
+            if not all(math.isfinite(c) for c in coords):
+                raise ValueError("Non-finite coordinates")
+        except (TypeError, ValueError, IndexError) as err:
+            raise ValueError(f"Bounding box coordinates must be finite numbers, got {bbox}") from err
+
+        x1, y1, x2, y2 = coords
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError(f"Bounding box coordinates must be non-degenerate (x2 > x1, y2 > y1), got x1={x1}, x2={x2}, y1={y1}, y2={y2}")
+
         bw = max(1.0, float(x2 - x1))
         bh = max(1.0, float(y2 - y1))
         u_center = (x1 + x2) / 2.0
         norm_name = class_name.lower().replace(" ", "_")
+        if norm_name == "stopsign":
+            norm_name = "stop_sign"
 
         # Boundary truncation flags
         bottom_clipped = y2 >= (self.image_height - 3)
@@ -157,6 +189,7 @@ class DistanceEstimator:
 
         # 3. Ground contact distance
         z_ground = self.estimate_ground_plane(float(y2))
+        ground_valid = (y2 - self.cy) > 1.0 and z_ground < 79.0
 
         # 4. Multi-Cue Hybrid Estimation
         if method == "pinhole":
@@ -180,9 +213,9 @@ class DistanceEstimator:
             elif top_clipped and not bottom_clipped:
                 # Top clipped, but ground contact and width are valid
                 if horiz_clipped:
-                    z_final = z_ground
+                    z_final = z_ground if ground_valid else z_pinhole_w
                 elif norm_name != "stop_sign":
-                    z_final = 0.60 * z_ground + 0.40 * z_pinhole_w
+                    z_final = 0.60 * z_ground + 0.40 * z_pinhole_w if ground_valid else z_pinhole_w
                 else:
                     z_final = z_pinhole_w
 
@@ -190,31 +223,37 @@ class DistanceEstimator:
                 # Object is clipped by left or right frame edge (width is truncated)
                 # Pinhole width will overestimate distance; rely on height and ground contact
                 if norm_name == "stop_sign":
-                    if aspect > 1.6:
+                    if aspect > 1.6 and ground_valid:
                         z_final = 0.65 * z_pinhole_h + 0.35 * z_ground
                     else:
                         z_final = z_pinhole_h
                 elif norm_name == "barrier":
-                    z_final = 0.50 * z_pinhole_h + 0.50 * z_ground
+                    z_final = (0.50 * z_pinhole_h + 0.50 * z_ground) if ground_valid else z_pinhole_h
                 else:  # cone
-                    z_final = 0.45 * z_pinhole_h + 0.55 * z_ground
+                    z_final = (0.45 * z_pinhole_h + 0.55 * z_ground) if ground_valid else z_pinhole_h
 
             elif norm_name == "stop_sign":
                 # Fully visible stop sign
-                if aspect > 1.6:
+                if aspect > 1.6 and ground_valid:
                     # Sign + post: ground contact and height are both valid
                     z_final = 0.45 * z_pinhole_w + 0.35 * z_pinhole_h + 0.20 * z_ground
                 else:
-                    # Octagon only: elevated sign, ground contact is invalid!
+                    # Octagon only or in air: ground contact is invalid!
                     z_final = 0.50 * z_pinhole_w + 0.50 * z_pinhole_h
 
             elif norm_name == "barrier":
                 # Jersey / pedestrian barrier sitting on ground
-                z_final = 0.30 * z_pinhole_w + 0.35 * z_pinhole_h + 0.35 * z_ground
+                if ground_valid:
+                    z_final = 0.30 * z_pinhole_w + 0.35 * z_pinhole_h + 0.35 * z_ground
+                else:
+                    z_final = 0.50 * z_pinhole_w + 0.50 * z_pinhole_h
 
             else:  # cone
                 # Traffic cone resting on ground
-                z_final = 0.35 * z_pinhole_w + 0.30 * z_pinhole_h + 0.35 * z_ground
+                if ground_valid:
+                    z_final = 0.35 * z_pinhole_w + 0.30 * z_pinhole_h + 0.35 * z_ground
+                else:
+                    z_final = 0.50 * z_pinhole_w + 0.50 * z_pinhole_h
 
         # Clamp to realistic min/max ranges
         spec = self.object_specs.get(norm_name, {"min_dist": 0.3, "max_dist": 60.0})

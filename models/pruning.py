@@ -61,12 +61,36 @@ def prune_model(
         yolo_wrapper = None
         torch_model = model_or_path
 
+    if not isinstance(amount, (int, float)) or not (0.0 <= amount < 1.0):
+        raise ValueError(f"Pruning amount must be a float between 0.0 and 1.0, got {amount}")
+    if prune_type not in ["l1_unstructured", "ln_structured"]:
+        raise ValueError(f"Unsupported prune_type '{prune_type}'. Must be 'l1_unstructured' or 'ln_structured'.")
+
     # Initial stats
     total_pre, zero_pre, spar_pre = calculate_model_sparsity(torch_model)
 
     pruned_layers_count = 0
     for name, module in torch_model.named_modules():
         if isinstance(module, nn.Conv2d):
+            # Exclude detection head (model.22) and stem (model.0.conv) to protect bounding box precision
+            # Crucially protect model.22.dfl.conv and regression/classification conv heads
+            name_parts = name.split(".")
+            is_stem = (
+                name == "model.0.conv"
+                or name.startswith("model.0.")
+                or name.startswith("0.")
+                or ("0" in name_parts and name_parts.index("0") <= 1)
+            )
+            is_head = (
+                "model.22" in name
+                or ".22." in name
+                or name.startswith("22.")
+                or "22" in name_parts
+                or "dfl" in name
+            )
+            if is_stem or is_head:
+                continue
+
             if prune_type == "l1_unstructured":
                 prune.l1_unstructured(module, name="weight", amount=amount)
                 prune.remove(module, "weight")  # Make pruning permanent
@@ -82,7 +106,9 @@ def prune_model(
     # Save pruned model if path provided
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        if yolo_wrapper is not None:
+        # Save weights in torch.float16 to maintain compact ~5.94 MB size
+        torch_model.half()
+        if yolo_wrapper is not None or hasattr(torch_model, "names") or "DetectionModel" in type(torch_model).__name__:
             # Save via PyTorch state dict or torch.save
             torch.save({"model": torch_model}, output_path)
         else:
